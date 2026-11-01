@@ -1,0 +1,14 @@
+services:
+  taxi-lib:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      DATABASE_PATH: /data/taxi-lib.sqlite
+    volumes:
+      - taxi-lib-data:/data
+    restart: unless-stopped
+
+volumes:
+  taxi-lib-data:

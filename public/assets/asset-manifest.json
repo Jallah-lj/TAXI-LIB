@@ -1,0 +1,74 @@
+{
+  "revision": 1,
+  "license": "CC0-1.0",
+  "mirror": {
+    "repository": "mohammedemara48-code/police-command",
+    "commit": "db6a7ba31e4071db4aa7ec5d7ea0349d1343bd93"
+  },
+  "sources": {
+    "civ_m1.glb": {
+      "path": "public/models/civ_m1.glb",
+      "sha256": "bd3b28096e32c5b185dcaa5a48d1bd20a8b7a053e5bb46c81e74e72b97ca9a95"
+    },
+    "civ_m2.glb": {
+      "path": "public/models/civ_m2.glb",
+      "sha256": "40b7c0662298be2af41106eeb7deec92379e472cb16463459bed9dcf8c7b2aaa"
+    },
+    "civ_f1.glb": {
+      "path": "public/models/civ_f1.glb",
+      "sha256": "569d8cd5b5bccca18d371a4c97ac84c1d24970b9cae35fe878ff78c8e2aad262"
+    },
+    "civ_f2.glb": {
+      "path": "public/models/civ_f2.glb",
+      "sha256": "a975365e4fc121e408d0295a6456c39febb1131f8a1f563de106c1f5a5d48447"
+    },
+    "car-sedan2.glb": {
+      "path": "public/models/car-sedan2.glb",
+      "sha256": "3065e6346a28bcff5ab15fec3fc04bfacda16ad79985eb83b1a1193fdf4ac822"
+    },
+    "car-hatch.glb": {
+      "path": "public/models/car-hatch.glb",
+      "sha256": "af91fbc8bf9f4e0830f85f488e523f297e6020968b635440c471a44c2020c423"
+    },
+    "car-van.glb": {
+      "path": "public/models/car-van.glb",
+      "sha256": "4e26fae6bb9a5a82d396db9cd0dedb53a1eba76bf4e9bad722712107a846cc16"
+    }
+  },
+  "upstream": {
+    "people": "https://static.makehumancommunity.org/assets/assetpacks/makehuman_system_assets.html",
+    "animation": "https://quaternius.itch.io/universal-animation-library",
+    "sedan": "https://www.innerscene.com/tools/library/3d-parts/white-four-door-sedan-1f271353",
+    "hatchback": "https://www.innerscene.com/tools/library/3d-parts/silver-five-door-compact-hatchback-6bf4a878",
+    "minibus": "https://www.innerscene.com/tools/library/3d-parts/passenger-van-with-side-windows-474dd4a2"
+  },
+  "derivatives": {
+    "characters/citizen-male.glb": "civ_m1 fully clothed male with the civ_m2 dark-skin texture",
+    "characters/citizen-female.glb": "civ_f1 fully clothed female with the civ_f2 dark-skin texture",
+    "vehicles/sedan.glb": "Innerscene white sedan; re-oriented, interiors removed, wheels regrouped, simplified and compressed by the pinned mirror",
+    "vehicles/hatchback.glb": "Innerscene silver hatchback; re-oriented, interiors removed, wheels regrouped, simplified and compressed by the pinned mirror",
+    "vehicles/minibus.glb": "Innerscene passenger van; re-oriented, interiors removed, wheels regrouped, simplified and compressed by the pinned mirror"
+  },
+  "outputs": {
+    "characters/citizen-male.glb": {
+      "bytes": 881036,
+      "sha256": "bf13a692b7d91a3c2730c0e2c1f140945643d8942d8fcda2271689f5a04e32c9"
+    },
+    "characters/citizen-female.glb": {
+      "bytes": 742408,
+      "sha256": "be836b6455a8e22ed043acef91cbd614e72595abbc8d777ff155316762f69c59"
+    },
+    "vehicles/sedan.glb": {
+      "bytes": 959208,
+      "sha256": "3065e6346a28bcff5ab15fec3fc04bfacda16ad79985eb83b1a1193fdf4ac822"
+    },
+    "vehicles/hatchback.glb": {
+      "bytes": 960972,
+      "sha256": "af91fbc8bf9f4e0830f85f488e523f297e6020968b635440c471a44c2020c423"
+    },
+    "vehicles/minibus.glb": {
+      "bytes": 1057500,
+      "sha256": "4e26fae6bb9a5a82d396db9cd0dedb53a1eba76bf4e9bad722712107a846cc16"
+    }
+  }
+}
