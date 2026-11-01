@@ -5,6 +5,7 @@ import type { MovementState } from '../../shared/protocol';
 import type { PlayerProfile } from '../../shared/types';
 import type { ActorCollisionWorld } from './actor-collision';
 import type { PlayerHealthState } from '../../shared/health';
+import type { NearbyCitizen } from '../social';
 
 interface Remote {
   profile: PlayerProfile;
@@ -95,6 +96,16 @@ export class RemotePlayers {
   positions() {
     return [...this.remotes.values()].filter((remote) => remote.target && !remote.target.interiorPropertyId).map((remote) => ({
       id: remote.profile.id, name: remote.profile.displayName, x: remote.target.position[0], z: remote.target.position[2],
+    }));
+  }
+
+  list(): NearbyCitizen[] {
+    return [...this.remotes.values()].map((remote) => ({
+      id: remote.profile.id,
+      displayName: remote.profile.displayName,
+      handle: remote.profile.handle,
+      mode: remote.target.mode,
+      insideHome: Boolean(remote.target.interiorPropertyId),
     }));
   }
 

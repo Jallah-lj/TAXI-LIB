@@ -278,7 +278,7 @@ export class Dealership {
         : `<button class="showroom-buy showroom-main-buy" data-showroom-buy ${blocked ? 'disabled' : ''}>${this.busy ? 'Processing…' : full ? 'Garage full' : !affordable ? 'Insufficient LRD' : `Review purchase · ${formatLrd(total)}`}</button>`}
       <button class="showroom-garage-link" data-showroom-open-garage>Open my garage <span>→</span></button>
       <p class="showroom-authority-note">Price, funds, capacity, ownership and configuration are verified and persisted by the game server. Purchases use duplicate-request protection.</p></div>`;
-    if (focusSelector) requestAnimationFrame(() => container.querySelector<HTMLElement>(focusSelector)?.focus({ preventScroll: true }));
+    if (focusSelector) container.querySelector<HTMLElement>(focusSelector)?.focus({ preventScroll: true });
   }
 
   private spec(label: string, value: string) {
@@ -346,9 +346,9 @@ export class Dealership {
     if (button.hasAttribute('data-showroom-buy')) {
       this.review = true;
       this.errorMessage = '';
-      this.renderDetails();
+      this.renderDetails('[data-showroom-confirm-purchase]');
     }
-    if (button.hasAttribute('data-showroom-cancel-review')) { this.review = false; this.renderDetails(); }
+    if (button.hasAttribute('data-showroom-cancel-review')) { this.review = false; this.renderDetails('[data-showroom-buy]'); }
     if (button.hasAttribute('data-showroom-confirm-purchase')) {
       this.pendingPurchase = true;
       this.pendingVehicleIds = new Set(this.state?.vehicles.map((vehicle) => vehicle.id) ?? []);

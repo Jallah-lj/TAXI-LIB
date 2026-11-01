@@ -1,4 +1,5 @@
 import './phone.css';
+import './feedback.css';
 import type {
   CharacterAppearance, CitizenTaskState, LedgerEntry, LifestyleState, PlayerProfile, PlayerVehicle,
   TaxiJob, TaxiTrip, Wallet, WorldBootstrap,
@@ -23,6 +24,16 @@ import {
   applyQualityPreset, BRIGHTNESS_MAX, BRIGHTNESS_MIN, QUALITY_PROFILES,
   type ClientSettings, type GraphicsQuality, type GraphicsSettings, type RenderScale,
 } from './settings';
+import {
+  NotificationCenter, type AppNotification, type NotificationActionType, type NotificationCategory,
+  type NotificationFilter, type NotificationInput, type NotificationTone,
+} from './notifications';
+import { INITIAL_CONNECTION_STATUS, connectionPhaseLabel, type ConnectionStatus } from './connection';
+import {
+  appendSocialMessage, citizenActivityLabel, socialRosterSignature,
+  type NearbyCitizen, type SocialChatMessage,
+} from './social';
+import { ConfirmationView, type ConfirmationRequest } from './ui/confirmation-view';
 
 export type PhoneTab = 'home' | 'calls' | 'vehicles' | 'homes' | 'garage' | 'wallet' | 'dispatch' | 'tasks' | 'civic';
 type AuthDetail = { handle: string; password: string; displayName?: string };
@@ -61,11 +72,16 @@ interface UIEventMap {
   'leave-home': undefined;
   'home-lights': undefined;
   lights: undefined;
+  reconnect: undefined;
+  reauthenticate: undefined;
+  wave: undefined;
 }
 
 export class UI {
   private readonly listeners = new Map<keyof UIEventMap, Set<(detail: never) => void>>();
   private readonly phone = new PhoneSystem((call) => this.renderPhoneCall(call));
+  private readonly notifications = new NotificationCenter();
+  private readonly confirmation: ConfirmationView;
   private readonly dealership: Dealership;
   private profile: PlayerProfile | null = null;
   private world: WorldBootstrap | null = null;
@@ -94,10 +110,18 @@ export class UI {
   private localInsideHome = false;
   private localHomeId: string | null = null;
   private homePanelId: string | null = null;
+  private notificationFilter: NotificationFilter = 'all';
+  private connection: ConnectionStatus = { ...INITIAL_CONNECTION_STATUS };
+  private socialPlayers: NearbyCitizen[] = [];
+  private socialSignature = '';
+  private chatHistory: SocialChatMessage[] = [];
+  private chatSequence = 0;
+  private onlineCount = 0;
   private menuTimer?: ReturnType<typeof setTimeout>;
 
   constructor(private settings: ClientSettings) {
     this.el('app').innerHTML = shell();
+    this.confirmation = new ConfirmationView(document.body);
     this.dealership = new Dealership(this.el('app'), {
       onPurchase: (detail) => this.emit('buy-vehicle', detail),
       onSelect: (vehicleId) => this.emit('select-vehicle', vehicleId),
@@ -121,6 +145,24 @@ export class UI {
     const element = document.getElementById(id);
     if (!element) throw new Error(`Missing interface element #${id}`);
     return element as T;
+  }
+
+  private bindChatComposer(formId: string, inputId: string) {
+    const input = this.input(inputId);
+    input.addEventListener('focus', () => this.emit('conversation', true));
+    input.addEventListener('blur', () => this.emit('conversation', false));
+    input.addEventListener('keydown', (event) => { if (event.key === 'Escape') input.blur(); });
+    this.el<HTMLFormElement>(formId).addEventListener('submit', (event) => {
+      event.preventDefault();
+      const text = input.value.trim();
+      if (!text) return;
+      if (this.connection.phase !== 'online') {
+        this.notify({ category: 'connection', tone: 'error', title: 'Chat is unavailable offline', message: 'Your draft is still here. Reconnect to the district before sending.', action: { type: 'reconnect', label: 'Reconnect' } });
+        return;
+      }
+      this.emit('chat', text);
+      input.value = '';
+    });
   }
 
   private bindEvents() {
@@ -147,19 +189,8 @@ export class UI {
       const data = new FormData(event.currentTarget as HTMLFormElement);
       this.emit('appearance', { skin: Number(data.get('skin')), hair: Number(data.get('hair')), top: Number(data.get('top')), bottom: Number(data.get('bottom')) });
     });
-    const chatInput = this.input('chat-input');
-    chatInput.addEventListener('focus', () => this.emit('conversation', true));
-    chatInput.addEventListener('blur', () => this.emit('conversation', false));
-    chatInput.addEventListener('keydown', (event) => {
-      if (event.key === 'Escape') chatInput.blur();
-    });
-    this.el<HTMLFormElement>('chat-form').addEventListener('submit', (event) => {
-      event.preventDefault();
-      const input = this.input('chat-input');
-      const text = input.value.trim();
-      if (text) this.emit('chat', text);
-      input.value = '';
-    });
+    this.bindChatComposer('chat-form', 'chat-input');
+    this.bindChatComposer('social-chat-form', 'social-chat-input');
     this.el('app').addEventListener('click', (event) => {
       const button = (event.target as HTMLElement).closest<HTMLButtonElement>('button');
       if (!button || button.disabled) return;
@@ -167,6 +198,25 @@ export class UI {
       if (button.dataset.uiAction === 'customize') this.emit('customize', undefined);
       if (button.dataset.uiAction === 'logout') this.emit('logout', undefined);
       if (button.hasAttribute('data-replay-onboarding')) this.emit('replay-onboarding', undefined);
+      if (button.hasAttribute('data-reconnect')) this.emit('reconnect', undefined);
+      if (button.hasAttribute('data-reauthenticate')) this.emit('reauthenticate', undefined);
+      if (button.hasAttribute('data-social-wave')) this.emit('wave', undefined);
+      if (button.dataset.notificationAction) this.handleNotificationAction(button.dataset.notificationAction as NotificationActionType);
+      if (button.dataset.notificationFilter) {
+        this.notificationFilter = button.dataset.notificationFilter as NotificationFilter;
+        this.renderNotifications();
+      }
+      if (button.hasAttribute('data-mark-notifications-read')) {
+        this.notifications.markAllRead();
+        this.updateNotificationBadge();
+        this.renderNotifications();
+      }
+      if (button.hasAttribute('data-clear-notifications')) {
+        this.notifications.clear();
+        this.updateNotificationBadge();
+        this.renderNotifications();
+      }
+      if (button.hasAttribute('data-dismiss-toast')) button.closest('.toast')?.remove();
       if (button.dataset.panel) this.openPanel(button.dataset.panel);
       if (button.hasAttribute('data-close-panels')) this.closePanels();
       if (button.dataset.acceptJob) this.emit('accept-job', button.dataset.acceptJob);
@@ -487,20 +537,55 @@ export class UI {
     this.el('trip-action').textContent = action === 'pickup' ? 'F · Pick up passenger' : action === 'complete' ? 'F · Complete trip & collect fare' : '';
   }
 
-  setConnection(connected: boolean) {
-    this.el('connection-pill').classList.toggle('connected', connected);
-    this.el('connection-label').textContent = connected ? 'LIVE' : 'RECONNECTING';
+  setConnection(status: ConnectionStatus) {
+    const previous = this.connection.phase;
+    this.connection = { ...status };
+    const pill = this.el('connection-pill');
+    pill.classList.toggle('connected', status.phase === 'online');
+    pill.dataset.phase = status.phase;
+    pill.title = status.lastError ?? connectionPhaseLabel(status.phase);
+    this.el('connection-label').textContent = connectionPhaseLabel(status.phase);
+    if (previous !== status.phase) {
+      if (status.phase === 'reconnecting' && previous === 'online') {
+        this.notify({ category: 'connection', tone: 'error', title: 'District connection interrupted', message: status.lastError ?? 'Live updates are paused. Your active work has not been cancelled.', action: { type: 'reconnect', label: 'Retry now' } });
+      } else if (status.phase === 'online' && (previous === 'reconnecting' || previous === 'offline')) {
+        this.notify({ category: 'connection', tone: 'success', title: 'District connection restored', message: 'Live citizens, chat and Civic updates are available again.' });
+      } else if (status.phase === 'offline' && previous !== 'idle') {
+        this.notify({ category: 'connection', tone: 'error', title: 'You are offline', message: 'Reconnect before sending chat or relying on live district updates.', action: { type: 'reconnect', label: 'Reconnect' } });
+      }
+    }
+    if (this.activePanel === 'connection') this.renderConnection();
+    if (this.activePanel === 'social') this.renderSocialStatus();
   }
 
-  addChat(message: { displayName: string; text: string; sentAt: string }) {
+  updateSocialPlayers(players: NearbyCitizen[]) {
+    const signature = socialRosterSignature(players);
+    this.socialPlayers = [...players];
+    if (signature === this.socialSignature) return;
+    this.socialSignature = signature;
+    if (this.activePanel === 'social') this.renderSocial();
+  }
+
+  addChat(message: { id?: string; playerId?: string; displayName: string; text: string; sentAt: string }) {
+    const entry: SocialChatMessage = {
+      id: message.id ?? `chat-${++this.chatSequence}`,
+      ...(message.playerId ? { playerId: message.playerId } : {}),
+      displayName: message.displayName, text: message.text, sentAt: message.sentAt,
+    };
+    this.chatHistory = appendSocialMessage(this.chatHistory, entry);
     const item = document.createElement('div');
     item.className = 'chat-message';
     const name = document.createElement('strong');
     name.textContent = `${message.displayName}: `;
-    const text = document.createTextNode(message.text);
-    item.append(name, text);
+    item.append(name, document.createTextNode(message.text));
     this.el('chat-messages').append(item);
     while (this.el('chat-messages').children.length > 12) this.el('chat-messages').firstElementChild?.remove();
+    this.notify({ category: 'social', tone: 'info', title: `${message.displayName} · nearby chat`, message: message.text, action: { type: 'social', label: 'Open social' } }, { silent: true });
+    if (this.activePanel === 'social') {
+      this.notifications.markCategoryRead('social');
+      this.updateNotificationBadge();
+      this.renderSocialMessages();
+    }
   }
 
   updateHUD(state: HUDState) {
@@ -511,7 +596,10 @@ export class UI {
     const hasDestination = Boolean(state.destinationName) && state.destinationDistance !== null;
     gps.textContent = hasDestination ? `${state.destinationName} · ${Math.round(state.destinationDistance!)} m` : 'GPS · NORTH UP';
     gps.title = hasDestination ? `${state.destinationName}: ${Math.round(state.destinationDistance!)} m to the exact route objective` : 'GPS · north up';
+    this.onlineCount = state.onlineCount;
     this.el('online-count').textContent = `${state.onlineCount} ONLINE`;
+    const socialCount = document.getElementById('social-online-count');
+    if (socialCount) socialCount.textContent = `${state.onlineCount} online · ${this.socialPlayers.length} nearby`;
     this.el('world-clock').textContent = formatGameTime(state.simulation.timeOfDaySeconds);
     this.el('phone-clock').textContent = formatGameTime(state.simulation.timeOfDaySeconds);
     this.el('weather-label').textContent = `${state.simulation.weather.toUpperCase()} · ${state.simulation.temperatureC}°C`;
@@ -582,6 +670,17 @@ export class UI {
     if (name === 'wallet') this.requestWallet();
     if (name === 'dispatch') this.emit('refresh-jobs', undefined);
     if (name === 'map') this.renderDestinations();
+    if (name === 'notifications') {
+      this.notifications.markAllRead();
+      this.updateNotificationBadge();
+      this.renderNotifications();
+    }
+    if (name === 'social') {
+      this.notifications.markCategoryRead('social');
+      this.updateNotificationBadge();
+      this.renderSocial();
+    }
+    if (name === 'connection') this.renderConnection();
     if (name === 'phone') { this.renderPhone(); this.loadPhoneTab(this.phoneTab); }
     if (name === 'showroom' && this.lifestyle) this.dealership.open(this.lifestyle);
     this.emit('panel', name);
@@ -605,6 +704,8 @@ export class UI {
     const locations = this.world?.locations ?? [];
     this.el('destination-list').innerHTML = locations.map((location) => `<button class="destination-item" data-location="${location.id}"><span>${escapeHtml(location.shortName)}</span><small>${escapeHtml(location.description)}</small></button>`).join('');
   }
+
+  confirmAction(request: ConfirmationRequest) { return this.confirmation.open(request); }
 
   openPhone(tab: PhoneTab = 'home') {
     if (tab === 'vehicles') { this.openPanel('showroom'); return; }
@@ -679,6 +780,8 @@ export class UI {
         ${this.phoneAppButton('tasks', 'tasks', '✓', 'Tasks', 'Community objectives', task ? 'Active' : '')}
         ${this.phoneAppButton('civic', 'civic', '▥', 'Civic', 'Government & safety', String(world.civic.incidents.filter((incident) => incident.status === 'open').length))}
         ${this.phoneAppButton('wallet', 'wallet', 'L$', 'Wallet', 'Balance & ledger')}
+        ${this.phoneExternalAppButton('social', '◎', 'Social', 'Nearby citizens & chat')}
+        ${this.phoneExternalAppButton('notifications', '✦', 'Alerts', 'Activity & recovery', this.notifications.unreadCount() ? String(this.notifications.unreadCount()) : '')}
         ${this.phoneAppButton('vehicles', 'motors', '▱', 'Motors', '3D showroom')}
         ${this.phoneAppButton('homes', 'homes', '⌂', 'Homes', 'Titles & room access')}
         ${this.phoneAppButton('garage', 'garage', '▦', 'Garage', 'Vehicles & workshop')}
@@ -690,6 +793,10 @@ export class UI {
 
   private phoneAppButton(tab: PhoneTab, id: string, icon: string, title: string, description: string, badge = '') {
     return `<button class="phone-app-tile" data-phone-app="${id}" data-phone-tab="${tab}"><span class="phone-app-tile-icon" aria-hidden="true">${icon}</span><span><strong>${title}</strong><small>${description}</small></span>${badge ? `<b>${escapeHtml(badge)}</b>` : ''}</button>`;
+  }
+
+  private phoneExternalAppButton(panel: string, icon: string, title: string, description: string, badge = '') {
+    return `<button class="phone-app-tile" data-panel="${panel}"><span class="phone-app-tile-icon" aria-hidden="true">${icon}</span><span><strong>${title}</strong><small>${description}</small></span>${badge ? `<b>${escapeHtml(badge)}</b>` : ''}</button>`;
   }
 
   private renderPhoneWallet() {
@@ -843,14 +950,139 @@ export class UI {
     if (button.dataset.selectVehicle) this.emit('select-vehicle', button.dataset.selectVehicle);
   }
 
-  toast(message: string, kind: 'success' | 'error' | 'info' = 'info') {
-    const toast = document.createElement('div');
-    toast.className = `toast ${kind}`;
-    toast.setAttribute('role', kind === 'error' ? 'alert' : 'status');
-    toast.textContent = message;
-    this.el('toast-stack').append(toast);
-    setTimeout(() => toast.remove(), kind === 'error' ? 6500 : 4300);
+  notify(input: NotificationInput, options: { silent?: boolean } = {}) {
+    const item = this.notifications.add(input);
+    if (this.activePanel === 'notifications') this.notifications.markAllRead();
+    this.updateNotificationBadge();
+    if (this.activePanel === 'notifications') this.renderNotifications();
+    if (!options.silent) this.renderToast(item);
+    return item;
   }
+
+  toast(message: string, kind: NotificationTone = 'info', category: NotificationCategory = 'system') {
+    return this.notify({
+      category, tone: kind,
+      title: kind === 'success' ? 'Action completed' : kind === 'error' ? 'Action needs attention' : 'District update',
+      message,
+    });
+  }
+
+  private updateNotificationBadge() {
+    const count = this.notifications.unreadCount();
+    const badge = this.el('notification-count');
+    badge.textContent = count > 99 ? '99+' : String(count);
+    badge.hidden = count === 0;
+    const button = this.el('notifications-button');
+    button.classList.toggle('has-unread', count > 0);
+    button.setAttribute('aria-label', count ? `Open notifications, ${count} unread` : 'Open notifications');
+  }
+
+  private renderToast(item: AppNotification) {
+    const toast = document.createElement('article');
+    toast.className = `toast ${item.tone}`;
+    toast.setAttribute('role', item.tone === 'error' ? 'alert' : 'status');
+    const icon = document.createElement('span');
+    icon.className = 'toast-icon';
+    icon.setAttribute('aria-hidden', 'true');
+    icon.textContent = item.tone === 'success' ? '✓' : item.tone === 'error' ? '!' : 'i';
+    const copy = document.createElement('div');
+    copy.className = 'toast-copy';
+    const title = document.createElement('strong');
+    title.textContent = item.title;
+    const message = document.createElement('span');
+    message.textContent = item.message;
+    copy.append(title, message);
+    toast.append(icon, copy);
+    if (item.action) {
+      const action = document.createElement('button');
+      action.type = 'button';
+      action.className = 'toast-action';
+      action.dataset.notificationAction = item.action.type;
+      action.textContent = item.action.label;
+      toast.append(action);
+    }
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.className = 'toast-dismiss';
+    close.dataset.dismissToast = '';
+    close.setAttribute('aria-label', 'Dismiss notification');
+    close.textContent = '×';
+    toast.append(close);
+    this.el('toast-stack').append(toast);
+    while (this.el('toast-stack').children.length > 4) this.el('toast-stack').firstElementChild?.remove();
+    setTimeout(() => toast.remove(), item.tone === 'error' || item.action ? 7000 : 4800);
+  }
+
+  private renderNotifications() {
+    const list = this.notifications.list(this.notificationFilter);
+    const filters: [NotificationFilter, string][] = [['all', 'All'], ['transaction', 'Transactions'], ['civic', 'Civic'], ['connection', 'Connection'], ['social', 'Social']];
+    this.el('notification-filters').innerHTML = filters.map(([filter, label]) => `<button type="button" class="notification-filter ${this.notificationFilter === filter ? 'active' : ''}" data-notification-filter="${filter}" aria-pressed="${this.notificationFilter === filter}">${label}${filter !== 'all' && this.notifications.unreadCount(filter) ? ` <b>${this.notifications.unreadCount(filter)}</b>` : ''}</button>`).join('');
+    this.el('notification-summary').textContent = `${this.notifications.unreadCount()} unread · ${this.notifications.list().length} retained this session`;
+    this.el('notification-list').innerHTML = list.length ? list.map((item) => `<article class="notification-item ${item.tone} ${item.read ? '' : 'unread'}">
+      <span class="notification-item-icon" aria-hidden="true">${item.tone === 'success' ? '✓' : item.tone === 'error' ? '!' : 'i'}</span>
+      <div class="notification-item-copy"><div class="notification-item-meta"><span>${notificationCategoryLabel(item.category)}</span><time datetime="${escapeHtml(item.createdAt)}">${escapeHtml(formatNotificationTime(item.createdAt))}</time></div><strong>${escapeHtml(item.title)}</strong><p>${escapeHtml(item.message)}</p>${item.action ? `<button type="button" class="notification-item-action" data-notification-action="${item.action.type}">${escapeHtml(item.action.label)} <span aria-hidden="true">→</span></button>` : ''}</div>
+    </article>`).join('') : '<div class="notification-empty"><span aria-hidden="true">✓</span><strong>You’re all caught up</strong><p>New transaction, Civic, connection and social updates will appear here for this session.</p></div>';
+    const markRead = this.el<HTMLButtonElement>('mark-notifications-read');
+    markRead.disabled = this.notifications.unreadCount() === 0;
+  }
+
+  private renderSocial() {
+    const local = this.profile;
+    const roster = this.socialPlayers;
+    this.el('social-online-count').textContent = `${this.onlineCount} online · ${roster.length} nearby`;
+    this.el('social-roster').innerHTML = `${local ? `<article class="social-person local"><span class="social-avatar">${escapeHtml(local.displayName.charAt(0).toUpperCase())}</span><div><strong>${escapeHtml(local.displayName)} <em>You</em></strong><small>@${escapeHtml(local.handle)} · ${local.reputation} reputation</small></div><span class="social-presence">ONLINE</span></article>` : ''}${roster.map((player) => `<article class="social-person"><span class="social-avatar">${escapeHtml(player.displayName.charAt(0).toUpperCase())}</span><div><strong>${escapeHtml(player.displayName)}</strong><small>@${escapeHtml(player.handle)} · ${escapeHtml(citizenActivityLabel(player))}</small></div><span class="social-presence">${player.insideHome ? 'AWAY' : 'NEARBY'}</span></article>`).join('')}${!roster.length ? '<div class="social-empty"><strong>No other citizens nearby</strong><p>Players within your realtime area will appear here automatically. Explore the district to meet someone.</p></div>' : ''}`;
+    this.renderSocialMessages();
+    this.renderSocialStatus();
+  }
+
+  private renderSocialMessages() {
+    const container = this.el('social-chat-messages');
+    container.innerHTML = this.chatHistory.length ? this.chatHistory.map((message) => `<article class="social-chat-message ${message.playerId && message.playerId === this.profile?.id ? 'own' : ''}"><div><strong>${escapeHtml(message.displayName)}</strong><time datetime="${escapeHtml(message.sentAt)}">${escapeHtml(formatNotificationTime(message.sentAt))}</time></div><p>${escapeHtml(message.text)}</p></article>`).join('') : '<div class="social-empty chat-empty"><strong>Start a nearby conversation</strong><p>Messages are delivered through the district server to citizens in your vicinity.</p></div>';
+    container.scrollTop = container.scrollHeight;
+  }
+
+  private renderSocialStatus() {
+    const online = this.connection.phase === 'online';
+    const status = this.el('social-connection-status');
+    status.dataset.phase = this.connection.phase;
+    status.textContent = online ? 'LIVE · proximity chat and waves are available' : `${connectionPhaseLabel(this.connection.phase)} · reconnect to send messages`;
+    this.el<HTMLButtonElement>('social-chat-send').disabled = !online;
+    this.el<HTMLButtonElement>('social-wave').disabled = !online;
+  }
+
+  private renderConnection() {
+    const status = this.connection;
+    const online = status.phase === 'online';
+    this.el('connection-status-badge').textContent = connectionPhaseLabel(status.phase);
+    this.el('connection-status-badge').dataset.phase = status.phase;
+    this.el('connection-status-title').textContent = online ? 'You’re connected to the district' : status.phase === 'reconnecting' ? 'We’re trying to restore your connection' : status.phase === 'offline' ? 'You’re currently offline' : 'Connecting to the district';
+    this.el('connection-status-detail').textContent = status.lastError ?? (online ? 'Live movement, nearby citizens, chat and Civic updates are flowing normally.' : 'Your active passenger trips, tasks and wallet remain on the server. Live updates will resume after reconnection.');
+    this.el('connection-retry-detail').textContent = status.phase === 'reconnecting' ? `Attempt ${Math.max(1, status.attempt)} · ${status.nextRetryAt ? 'Automatic retry scheduled' : 'Preparing the next retry'}` : online ? 'No action needed. You can review recent connection events in Notifications.' : 'Use Retry now if your network has recovered. Nothing is purchased or cancelled by retrying.';
+    this.el<HTMLButtonElement>('connection-retry').disabled = online || status.phase === 'connecting';
+    this.el<HTMLButtonElement>('connection-retry').textContent = status.phase === 'connecting' ? 'Connecting…' : 'Retry now';
+  }
+
+  private handleNotificationAction(action: NotificationActionType) {
+    if (action === 'wallet') this.openPanel('wallet');
+    if (action === 'civic') this.openPhone('civic');
+    if (action === 'social') this.openPanel('social');
+    if (action === 'connection') this.openPanel('connection');
+    if (action === 'reconnect') this.emit('reconnect', undefined);
+    if (action === 'refresh-dispatch') this.emit('refresh-jobs', undefined);
+    if (action === 'refresh-civic') this.emit('load-civic', undefined);
+    if (action === 'refresh-wallet') this.requestWallet();
+    if (action === 'sign-in') this.emit('reauthenticate', undefined);
+  }
+
+}
+
+function notificationCategoryLabel(category: NotificationCategory) {
+  return ({ transaction: 'TRANSACTION', civic: 'CIVIC', connection: 'CONNECTION', social: 'SOCIAL', system: 'DISTRICT' })[category];
+}
+
+function formatNotificationTime(value: string) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? 'Recently' : date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
 function appearanceChoices(name: keyof CharacterAppearance, label: string, count: number, selected: number) {
@@ -911,11 +1143,11 @@ function shell() {
         <form id="login-form" class="auth-form"><label>Citizen handle<input id="login-handle" autocomplete="username" required placeholder="your-handle"></label><label>Password<input id="login-password" type="password" autocomplete="current-password" required></label><p id="auth-error" class="form-error" role="alert"></p><button class="primary-button" type="submit">Sign in securely</button></form>
         <form id="register-form" class="auth-form" hidden><label>Display name<input id="register-name" autocomplete="nickname" minlength="2" maxlength="24" required placeholder="Your citizen name"></label><label>Unique handle<input id="register-handle" autocomplete="username" minlength="3" maxlength="20" pattern="[A-Za-z0-9_]+" required placeholder="musu-driver"></label><label>Password<input id="register-password" type="password" autocomplete="new-password" minlength="8" required></label><p class="form-error" data-register-error></p><button class="primary-button" type="submit">Create citizen account</button></form><p class="local-note">Fictionalized, compressed geography. No real-money purchases or real-world telephony.</p></div>
       <div id="lobby-view" hidden></div></div></div><footer class="menu-footer"><span>MONROVIA-INSPIRED · FICTIONAL GAME DISTRICT</span><span>WASD to move · E to interact · P for phone</span></footer></section>
-    <div id="hud" class="hud" hidden><div class="hud-top"><div class="hud-brand"><span class="brand-mark small">TL</span><div><b>TAXI-LIB</b><small>COASTAL COOPERATIVE</small></div></div><div class="hud-location"><span>●</span><div><small>CURRENT AREA</small><strong id="area-name">12th Street</strong></div></div><div class="hud-right"><div class="world-time"><small>DISTRICT TIME</small><strong id="world-clock">06:00</strong><span id="weather-label">CLEAR · 29°C</span></div><span id="online-count" class="online-pill">1 ONLINE</span><button class="wallet-chip" data-panel="wallet" data-wallet-balance>L$ 0</button><button id="connection-pill" class="connection-pill" data-panel="settings"><i></i><span id="connection-label">CONNECTING</span></button></div></div>
+    <div id="hud" class="hud" hidden><div class="hud-top"><div class="hud-brand"><span class="brand-mark small">TL</span><div><b>TAXI-LIB</b><small>COASTAL COOPERATIVE</small></div></div><div class="hud-location"><span>●</span><div><small>CURRENT AREA</small><strong id="area-name">12th Street</strong></div></div><div class="hud-right"><div class="world-time"><small>DISTRICT TIME</small><strong id="world-clock">06:00</strong><span id="weather-label">CLEAR · 29°C</span></div><span id="online-count" class="online-pill">1 ONLINE</span><button id="notifications-button" class="notification-button" data-panel="notifications" aria-label="Open notifications"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg><b id="notification-count" hidden>0</b></button><button class="wallet-chip" data-panel="wallet" data-wallet-balance>L$ 0</button><button id="connection-pill" class="connection-pill" data-panel="connection"><i></i><span id="connection-label">CONNECTING</span></button></div></div>
       <div id="health-status" class="health-status" role="status" aria-live="polite" hidden></div>
       <div id="objective-card" class="objective-card" hidden><p id="objective-kicker" class="panel-kicker">ACTIVE TRIP</p><strong id="objective-name"></strong><span id="hud-trip-route"></span><button class="text-button" data-cancel-trip>Cancel trip</button></div>
       <aside id="home-navigator" class="home-navigator" aria-label="Owned home room navigator" hidden><header><div><small id="home-level">PRIVATE RESIDENCE</small><strong id="home-name">Your home</strong></div><button data-leave-home>Leave home</button></header><p id="home-room-description"></p><div id="home-room-list" class="home-room-list" aria-label="Rooms"></div><button id="home-light-button" class="home-light-button" data-home-lights aria-pressed="true"><span aria-hidden="true">◐</span><span id="home-light-label">Lights on</span><kbd>L</kbd></button><small class="home-navigation-hint">WASD to walk · E at the front door to leave</small></aside>
-      <div class="hud-actions"><button data-panel="dispatch" aria-label="Open dispatch"><span>▣</span><span>Dispatch</span></button><button data-panel="map" aria-label="Open map"><span>⌖</span><span>Map</span><kbd>M</kbd></button><button data-panel="phone" aria-label="Open citizen phone"><span>▤</span><span>Phone</span><kbd>P</kbd></button><button data-panel="settings" aria-label="Open settings"><span>⚙</span><span>Settings</span></button></div>
+      <div class="hud-actions"><button data-panel="dispatch" aria-label="Open dispatch"><span>▣</span><span>Dispatch</span></button><button data-panel="social" aria-label="Open nearby citizens and chat"><span aria-hidden="true">◎</span><span>Social</span></button><button data-panel="map" aria-label="Open map"><span>⌖</span><span>Map</span><kbd>M</kbd></button><button data-panel="phone" aria-label="Open citizen phone"><span>▤</span><span>Phone</span><kbd>P</kbd></button><button data-panel="settings" aria-label="Open settings"><span>⚙</span><span>Settings</span></button></div>
       <div id="driving-cluster" class="driving-cluster faded"><div class="speed-gauge"><strong id="speed-value">0</strong><span>km/h</span></div><div class="vehicle-readouts"><strong id="vehicle-name">Vehicle</strong><span>Fuel <b id="fuel-value">100%</b> · Condition <b id="condition-value">100%</b></span><button data-lights aria-pressed="false"><span aria-hidden="true">◐</span> <span data-light-label>Lights off</span> <kbd>L</kbd></button></div></div>
       <div class="minimap-wrap"><canvas id="minimap" aria-label="Local navigation map"></canvas><div class="minimap-footer"><span id="gps-status">GPS · NORTH UP</span><button data-panel="map">EXPAND</button></div></div>
       <div id="interaction-prompt" class="interaction-prompt" hidden><kbd>E</kbd><span id="interaction-text"></span></div><button id="trip-action" class="trip-action" hidden></button>
@@ -942,6 +1174,9 @@ function shell() {
       <section class="settings-section" aria-labelledby="controls-settings-heading"><h3 id="controls-settings-heading">Controls</h3><div class="control-grid"><span><kbd>WASD</kbd> Move / drive</span><span><kbd>E</kbd> Enter / exit</span><span><kbd>F</kbd> Trip action</span><span><kbd>L</kbd> Headlights</span><span><kbd>C</kbd> Camera</span><span><kbd>P</kbd> Citizen phone</span><span><kbd>M</kbd> Map</span><span><kbd>G</kbd> Wave</span></div></section>
       <p class="settings-note">Display, motion and sound preferences apply immediately and are stored only in this browser when storage is available. Rain still reduces grip and braking; graphics settings never change authoritative gameplay.</p>
     </div></section>
+    <section id="notifications-panel" class="game-panel notifications-panel" role="dialog" aria-modal="true" aria-label="Notification history" hidden><header><div><p class="panel-kicker">CITIZEN ACTIVITY</p><h2>Notifications</h2></div><button class="icon-button" data-close-panels aria-label="Close notifications">×</button></header><div class="notification-toolbar"><span id="notification-summary">0 unread · 0 retained this session</span><div><button id="mark-notifications-read" class="text-button" data-mark-notifications-read>Mark all read</button><button class="text-button" data-clear-notifications>Clear activity</button></div></div><div id="notification-filters" class="notification-filters" role="group" aria-label="Filter notifications"></div><div id="notification-list" class="notification-list" aria-live="polite"></div><p class="panel-footnote">A small session-only activity history. Financial records remain available in Wallet; connection recovery never replays a purchase or cancels work.</p></section>
+    <section id="social-panel" class="game-panel social-panel" role="dialog" aria-modal="true" aria-label="Nearby citizens and social chat" hidden><header><div><p class="panel-kicker">COASTAL COMMUNITY</p><h2>Social</h2></div><button class="icon-button" data-close-panels aria-label="Close social panel">×</button></header><div class="social-workspace"><aside class="social-roster-column"><div class="social-roster-heading"><div><strong>Nearby citizens</strong><small id="social-online-count">0 online · 0 nearby</small></div><button id="social-wave" class="secondary-button" data-social-wave>Wave <span aria-hidden="true">👋</span></button></div><div id="social-roster" class="social-roster"></div></aside><div class="social-chat-column"><div class="social-chat-heading"><div><strong>Nearby chat</strong><small id="social-connection-status" data-phase="idle">NOT CONNECTED · reconnect to send messages</small></div><span class="social-chat-scope">PROXIMITY</span></div><div id="social-chat-messages" class="social-chat-messages" aria-live="polite" aria-label="Nearby chat history"></div><form id="social-chat-form" class="social-chat-form"><input id="social-chat-input" maxlength="200" placeholder="Write to nearby citizens…" aria-label="Nearby chat message" autocomplete="off"><button id="social-chat-send" class="primary-button" type="submit">Send</button></form><small class="social-chat-note">Messages are sent through the authenticated district server. No voice chat or global direct messages.</small></div></div></section>
+    <section id="connection-panel" class="game-panel connection-panel" role="dialog" aria-modal="true" aria-label="Connection and recovery" hidden><header><div><p class="panel-kicker">DISTRICT CONNECTION</p><h2>Connection & recovery</h2></div><button class="icon-button" data-close-panels aria-label="Close connection panel">×</button></header><div class="connection-recovery"><span id="connection-status-badge" class="connection-status-badge" data-phase="idle">NOT CONNECTED</span><h3 id="connection-status-title">Connecting to the district</h3><p id="connection-status-detail">Your active passenger trips, tasks and wallet remain on the server. Live updates will resume after reconnection.</p><div id="connection-retry-detail" class="connection-retry-detail">Use Retry now if your network has recovered.</div><div class="connection-actions"><button id="connection-retry" class="primary-button" data-reconnect>Retry now</button><button class="secondary-button" data-panel="notifications">Review activity</button></div><p class="panel-footnote">Retrying opens a new realtime session. It does not replay financial requests, cancel active work or move your citizen.</p></div></section>
     <section id="phone-panel" class="game-panel phone-panel" role="dialog" aria-modal="true" aria-label="Compact citizen smartphone" hidden><div class="phone-device"><div class="phone-hardware" aria-hidden="true"><i></i><span></span></div><div class="phone-screen"><header class="phone-statusbar"><span id="phone-clock">06:00</span><span>Kendeja · 4G</span><button data-close-panels aria-label="Close phone">×</button></header><div class="phone-appbar"><button class="phone-app-icon" data-phone-tab="home" aria-label="Open citizen phone home">TL</button><div><small>CITIZEN OS</small><strong id="phone-app-title">Local services</strong></div><strong data-wallet-balance>L$ 0</strong></div><div id="phone-content" class="phone-content" role="tabpanel" aria-label="Phone application" tabindex="0"></div><nav id="phone-tabs" class="phone-tabs" role="tablist" aria-label="Phone applications"><button class="active" role="tab" aria-controls="phone-content" data-phone-tab="home"><span aria-hidden="true">⌂</span><small>Home</small></button><button role="tab" aria-controls="phone-content" data-phone-tab="calls"><span aria-hidden="true">☎</span><small>Services</small></button><button role="tab" aria-controls="phone-content" data-phone-tab="vehicles"><span aria-hidden="true">▱</span><small>Motors</small></button><button role="tab" aria-controls="phone-content" data-phone-tab="homes"><span aria-hidden="true">▤</span><small>Homes</small></button><button role="tab" aria-controls="phone-content" data-phone-tab="garage"><span aria-hidden="true">▦</span><small>Garage</small></button></nav><div class="phone-home-indicator" aria-hidden="true"></div></div></div></section>
     <section id="character-panel" class="character-modal" role="dialog" aria-modal="true" aria-label="Customize character" hidden><header><div><p class="panel-kicker">YOUR CITIZEN</p><h2>Appearance</h2></div><button class="icon-button" data-close-panels aria-label="Close">×</button></header><p>Choose your realistic local citizen model, skin tone and clothing. Appearance is saved to your account.</p><form id="character-form"></form></section>
     <div id="toast-stack" class="toast-stack" aria-live="polite"></div>`;

@@ -46,6 +46,16 @@ Two white community-police sedans use the same signal/collision-aware routes, do
 
 Chat remains the authenticated, rate-limited, persisted, proximity-delivered player text system. Focusing the chat field now clears held keyboard/touch controls and immediately stops local walking speed. While the field remains active, the production input helper returns zero movement/brake input, including for a held gamepad; editable fields do not capture new WASD keypresses. Escape or another focus change releases conversation state, after which a new deliberate movement input is required. Sending or receiving a chat message does not itself toggle movement for other players.
 
+## Action feedback, social and recovery
+
+The HUD bell and phone Alerts app open a bounded, session-only notification history. Transaction, Civic, connection, social and system events retain a title, detail, timestamp, read state and an optional next action. Filters and mark-read/clear controls affect only this activity feed; the authoritative Wallet ledger is separate. Toasts remain available for immediate feedback and include a dismiss control.
+
+The Social panel is a real nearby-citizen workspace. Its roster comes from the authenticated realtime interest set and reports walking, driving or indoor presence. The existing proximity chat and wave emote are available from the panel; chat history is capped and session-scoped. There are no simulated friend requests, global direct messages or voice controls. Offline composers retain their draft and do not silently discard a message.
+
+Home purchases, property upgrades and vehicle upgrades use an accessible focus-trapped confirmation dialog showing the actual cost and resulting balance. Passenger and citizen-task cancellation explains the work/reward consequence before the existing authoritative cancellation route is called. The showroom retains its existing configured-order review. The server still rechecks funds, ownership, capacity, request identity and active-work state after confirmation.
+
+The connection indicator opens a recovery panel with live/connecting/reconnecting/offline state, the last useful error, bounded automatic retry metadata and a manual **Retry now** action. A manual retry replaces stale socket attempts; it never replays financial mutations, cancels active work or moves the citizen. Dispatch, Civic and Wallet refresh failures expose retry actions in the notification center. Chat and waves report failure instead of claiming delivery while offline.
+
 ## Lifestyle commerce and phone
 
 The phone's contacts are deterministic, timed NPC text simulations—not telecom calls, generative agents or voice chat. Their action buttons open real dispatch, showroom and property panels. Home and vehicle purchases use canonical shared catalog prices and server-side transactions. Each home level adds one garage slot; base capacity is two. A purchased vehicle joins the persistent garage and can be selected while the citizen is on foot and outside an active trip. Selection replaces the local vehicle at the current parking position and is restored on later entry. Upgrade and selection requests are rejected for unauthorized, occupied or active-trip vehicles. Request UUIDs make retries safe, and every debit has a signed ledger entry. There is no real-money or real-property transaction.

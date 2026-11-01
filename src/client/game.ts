@@ -14,7 +14,9 @@ import { CharacterEntity } from './entities/character';
 import { getSimulationState, type SimulationState } from '../shared/simulation';
 import { distance2D, getLocation, WORLD_LOCATIONS, type Point2 } from '../shared/world';
 import { routeBetween } from '../shared/navigation';
-import type { MovementState } from '../shared/protocol';
+import type { MovementState, ServerMessage } from '../shared/protocol';
+import type { ConnectionStatus } from './connection';
+import type { NearbyCitizen } from './social';
 import { healthyHealth, type PlayerHealthState } from '../shared/health';
 import type { PlayerProperty, TaxiTrip, Wallet, WorldBootstrap } from '../shared/types';
 import { PROPERTY_CATALOG, type PropertyCatalogEntry } from '../shared/catalog';
@@ -82,8 +84,9 @@ interface GameCallbacks {
   onCivicIncidents: (incidents: CivicIncident[]) => void;
   onSafety: (safety: PlayerSafetyState, wallet: Wallet, notice: string) => void;
   onToast: (message: string, kind?: 'success' | 'error' | 'info') => void;
-  onConnection: (connected: boolean) => void;
-  onChat: (message: { displayName: string; text: string; sentAt: string }) => void;
+  onConnection: (status: ConnectionStatus) => void;
+  onSocial: (players: NearbyCitizen[]) => void;
+  onChat: (message: Extract<ServerMessage, { type: 'chat' }>) => void;
   onHome: (home: HomeHUDState | null) => void;
 }
 
@@ -151,13 +154,12 @@ export class Game {
     this.controls = new Controls(canvas, (action) => this.controlAction(action));
     this.controls.enabled = false;
     this.realtime = new RealtimeClient({
-      onOpen: () => { this.connected = true; this.callbacks.onConnection(true); },
-      onClose: () => { this.connected = false; this.callbacks.onConnection(false); },
+      onStatus: (status) => { this.connected = status.phase === 'online'; this.callbacks.onConnection(status); },
       onWelcome: () => { this.sequence = 0; },
-      onSnapshot: (players) => players.forEach((player) => this.remotes.apply(player)),
-      onProfile: (profile) => this.remotes.addProfile(profile),
-      onState: (state) => this.remotes.apply(state),
-      onLeave: (id) => this.remotes.remove(id),
+      onSnapshot: (players) => { players.forEach((player) => this.remotes.apply(player)); this.publishSocial(); },
+      onProfile: (profile) => { this.remotes.addProfile(profile); this.publishSocial(); },
+      onState: (state) => { this.remotes.apply(state); this.publishSocial(); },
+      onLeave: (id) => { this.remotes.remove(id); this.publishSocial(); },
       onChat: (message) => this.callbacks.onChat(message),
       onEmote: (id) => this.remotes.emote(id),
       onSimulation: (simulation) => { this.simulation = simulation; this.serverOffset = simulation.serverTime - Date.now(); },
@@ -269,7 +271,7 @@ export class Game {
     }
     if (action === 'camera') this.firstPerson = !this.firstPerson;
     if (action === 'trip' && this.currentTripAction) this.callbacks.onTripRequest();
-    if (action === 'emote') { this.local.wave(); this.realtime.emote(); }
+    if (action === 'emote') this.wave();
     if (action === 'lights') {
       if (this.activeInterior) {
         const on = this.activeInterior.interior.toggleLights();
@@ -533,7 +535,17 @@ export class Game {
     this.resize();
   }
 
-  chat(text: string) { this.realtime.chat(text); }
+  chat(text: string) { return this.realtime.chat(text); }
+
+  wave() {
+    if (!this.local || !this.entered) return false;
+    this.local.wave();
+    return this.realtime.emote();
+  }
+
+  reconnect() { this.realtime.reconnect(); }
+
+  private publishSocial() { this.callbacks.onSocial(this.remotes.list()); }
 
   private rebuildActorCollisions() {
     this.actorCollisions.clear();

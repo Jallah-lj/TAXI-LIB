@@ -27,7 +27,7 @@ Open **http://localhost:3000**. In Arena or another remote preview, open the for
 10. Open **Phone → Tasks** and accept **Market Restock**. On foot, follow GPS to the exact glowing **CURRENT OBJECTIVE** sign at **Cooperative Garage** and press **E** to collect the packed provisions. Then follow the updated route to **Sinkor Market** and press **E** at the marked stall to stock it. The server pays the **L$650** reward once after both steps.
 11. Open **Phone → Civic** for fictional department information, worker shifts, notices, municipal contracts, shared incidents and your safety record. Accept an open incident, follow its exact GPS target and press **E** on foot to resolve it. After resolution, nearby report sites can be reported again through the same Civic app. Municipal and District Safety counters, civic workers and marked incidents also provide contextual **E** interactions.
 
-For a second player, open a separate browser profile or private window, register another account, and enter the same server. Nearby characters, vehicles, movement, waving, and text chat replicate through the authenticated WebSocket gateway. Focusing the chat field clears held movement controls and keeps the typing pedestrian still; receiving a message does not stop the recipient.
+For a second player, open a separate browser profile or private window, register another account, and enter the same server. Nearby characters, vehicles, movement, waving, and text chat replicate through the authenticated WebSocket gateway. Open **Social** for the nearby roster, proximity chat history and wave control. Focusing either chat field clears held movement controls and keeps the typing pedestrian still; receiving a message does not stop the recipient. The HUD bell retains a small session-only activity history for transactions, Civic updates, connection events and social messages.
 
 ## Controls
 
@@ -90,6 +90,8 @@ The container stores the local SQLite database in a named volume. The compose co
 - **Environment:** compressed day/night, street lighting, changing NPC activity, tropical rain, reduced visibility/grip, wet materials and weather-influenced server quotes. Night-only ambient/moon/camera-side fill and subtle texture-preserving character material fill keep faces, eyes and clothing readable without changing the clear-day lighting profile.
 - **Graphics and accessibility settings:** persistent browser-local Low/Medium/High presets, 60/75/100% 3D resolution, optional dynamic shadows, bounded brightness/night visibility, reduced decorative motion and sound volume. Medium at 100% brightness preserves the established rendering profile. Preferences affect presentation only; interface text stays sharp and gameplay/authoritative state is unchanged.
 - **First-trip onboarding:** a professional, non-modal six-milestone coachmark sequence driven by actual walking, vehicle entry, phone/dispatch events and matching server trip IDs. It provides live taxi/destination distances, highlighted existing controls, accessible progress, minimize/exit confirmation, cancellation recovery, a completion fare summary and Settings replay. Only completion/dismissal preference is account-persistent; current step progress is session-only and the guide never cancels work or changes fares.
+- **Action feedback and recovery:** accessible purchase/upgrade/cancellation confirmations, titled toast feedback, a bounded categorized notification history with unread filters and next actions, and a connection recovery panel with bounded automatic/manual retry. Retry never replays financial mutations or cancels active work.
+- **Social interface:** a realtime nearby-citizen roster with walking/driving/indoor presence, proximity chat history, offline-safe composers and the existing wave emote. No friend, global-DM or voice feature is simulated.
 - **Interface:** live-world menu, account/lobby, character customization, HUD, dispatch, interactive map, wallet ledger, settings, chat, responsive compact-phone/showroom/property/garage apps, an in-world room navigator and contextual vehicle/home controls.
 - **Audio:** original Web Audio engine/rain/coastal sound and two-voice police siren synthesis with proximity attenuation, stereo direction and master-volume control. No voice chat is claimed.
 
@@ -111,6 +113,10 @@ src/
     showroom/             lazy 3D studio and dealership interface
     systems/              controls, physics, NPCs, traffic, weather, audio, maps
     onboarding.ts         event-driven first-trip guide state machine
+    notifications.ts      bounded categorized activity history
+    connection.ts         realtime recovery status and backoff policy
+    social.ts             nearby roster and bounded chat models
+    ui/confirmation-view.ts  focus-managed consequential-action dialog
     ui/onboarding-view.*  accessible coachmarks, progress and responsive styling
     game.ts               render/simulation orchestration
     ui.ts                 connected menus, HUD and panels
